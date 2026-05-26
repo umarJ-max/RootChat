@@ -51,21 +51,31 @@ export const AuthProvider = ({ children }) => {
   };
 
   const register = async (name, phone, password) => {
-    const res = await axios.post(`${SERVER_URL}/api/auth/register`, { name, phone, password });
-    await SecureStore.setItemAsync('token', res.data.token);
-    await SecureStore.setItemAsync('user', JSON.stringify(res.data.user));
-    setToken(res.data.token);
-    setUser(res.data.user);
-    savePushToken(res.data.token);
+    try {
+      const res = await axios.post(`${SERVER_URL}/api/auth/register`, { name, phone, password });
+      await SecureStore.setItemAsync('token', res.data.token);
+      await SecureStore.setItemAsync('user', JSON.stringify(res.data.user));
+      setToken(res.data.token);
+      setUser(res.data.user);
+      savePushToken(res.data.token);
+    } catch (e) {
+      const message = e.response?.data?.message || e.message || 'Registration failed';
+      throw new Error(message);
+    }
   };
 
   const login = async (phone, password) => {
-    const res = await axios.post(`${SERVER_URL}/api/auth/login`, { phone, password });
-    await SecureStore.setItemAsync('token', res.data.token);
-    await SecureStore.setItemAsync('user', JSON.stringify(res.data.user));
-    setToken(res.data.token);
-    setUser(res.data.user);
-    savePushToken(res.data.token);
+    try {
+      const res = await axios.post(`${SERVER_URL}/api/auth/login`, { phone, password });
+      await SecureStore.setItemAsync('token', res.data.token);
+      await SecureStore.setItemAsync('user', JSON.stringify(res.data.user));
+      setToken(res.data.token);
+      setUser(res.data.user);
+      savePushToken(res.data.token);
+    } catch (e) {
+      const message = e.response?.data?.message || e.message || 'Login failed';
+      throw new Error(message);
+    }
   };
 
   const logout = async () => {
