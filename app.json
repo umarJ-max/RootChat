@@ -1,29 +1,55 @@
 {
   "expo": {
-    "name": "mobile",
-    "slug": "mobile",
+    "name": "RootChat",
+    "slug": "whatsapp-clone",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/icon.png",
-    "userInterfaceStyle": "light",
-    "newArchEnabled": true,
+    "icon": "./assets/Icon.png",
+    "userInterfaceStyle": "dark",
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
-      "backgroundColor": "#ffffff"
+      "backgroundColor": "#0b1a0b"
     },
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.umarj.rootchat"
     },
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#ffffff"
+        "backgroundColor": "#0b1a0b"
       },
-      "edgeToEdgeEnabled": true
+      "package": "com.umarj.rootchat",
+      "permissions": [
+        "RECEIVE_BOOT_COMPLETED",
+        "VIBRATE",
+        "READ_CONTACTS"
+      ]
     },
-    "web": {
-      "favicon": "./assets/favicon.png"
-    }
+    "plugins": [
+      "expo-secure-store",
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/icon.png",
+          "color": "#25D366",
+          "sounds": []
+        }
+      ],
+      [
+        "expo-contacts",
+        {
+          "contactsPermission": "Allow RootChat to access your contacts to find friends on the app."
+        }
+      ],
+      "expo-font"
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "203cd906-f69b-4328-b0be-85c2e5dfcd84"
+      }
+    },
+    "owner": "umarj1"
   }
 }

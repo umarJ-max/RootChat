@@ -1,0 +1,1 @@
+export const SERVER_URL = 'https://cheap-barbabra-umarj-b4264588.koyeb.app';
