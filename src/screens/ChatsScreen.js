@@ -12,8 +12,9 @@ import { useSocket } from '../context/SocketContext';
 
 export default function ChatsScreen({ navigation }) {
   const { user, token } = useAuth();
-  const { onlineUsers } = useSocket();
+  const { onlineUsers, socket } = useSocket();
   const [chats, setChats] = useState([]);
+  const [unreadCounts, setUnreadCounts] = useState({});
   const [loading, setLoading] = useState(true);
   const [selectedChat, setSelectedChat] = useState(null);
   const [menuVisible, setMenuVisible] = useState(false);
@@ -30,12 +31,45 @@ export default function ChatsScreen({ navigation }) {
     };
   }, []);
 
+  // Listen for new messages to update unread counts
+  useEffect(() => {
+    if (!socket) return;
+    socket.on('newMessage', (msg) => {
+      // Only increment if we're not currently in that chat
+      setUnreadCounts(prev => ({
+        ...prev,
+        [msg.chat]: (prev[msg.chat] || 0) + 1
+      }));
+      // Refresh chat list to update last message
+      fetchChats();
+    });
+    return () => socket.off('newMessage');
+  }, [socket]);
+
   const fetchChats = async () => {
     try {
       const res = await axios.get(`${SERVER_URL}/api/chats`, {
         headers: { Authorization: `Bearer ${token}` }
       });
-      setChats(res.data);
+      const chatsData = res.data;
+      setChats(chatsData);
+
+      // Fetch unread counts for each chat
+      const counts = {};
+      await Promise.all(chatsData.map(async (chat) => {
+        try {
+          const msgRes = await axios.get(`${SERVER_URL}/api/chats/${chat._id}/messages`, {
+            headers: { Authorization: `Bearer ${token}` }
+          });
+          const unread = msgRes.data.filter(m =>
+            m.sender?._id !== user._id &&
+            m.sender !== user._id &&
+            m.status !== 'read'
+          ).length;
+          counts[chat._id] = unread;
+        } catch (e) {}
+      }));
+      setUnreadCounts(counts);
     } catch (e) {}
     setLoading(false);
   };
@@ -60,50 +94,42 @@ export default function ChatsScreen({ navigation }) {
 
   const handleClearChat = () => {
     setMenuVisible(false);
-    Alert.alert(
-      'Clear Chat',
-      'Are you sure you want to clear all messages?',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Clear', style: 'destructive',
-          onPress: async () => {
-            try {
-              await axios.delete(`${SERVER_URL}/api/chats/${selectedChat._id}/messages`, {
-                headers: { Authorization: `Bearer ${token}` }
-              });
-              fetchChats();
-            } catch (e) {
-              Alert.alert('Error', 'Could not clear chat');
-            }
+    Alert.alert('Clear Chat', 'Are you sure you want to clear all messages?', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Clear', style: 'destructive',
+        onPress: async () => {
+          try {
+            await axios.delete(`${SERVER_URL}/api/chats/${selectedChat._id}/messages`, {
+              headers: { Authorization: `Bearer ${token}` }
+            });
+            fetchChats();
+          } catch (e) {
+            Alert.alert('Error', 'Could not clear chat');
           }
         }
-      ]
-    );
+      }
+    ]);
   };
 
   const handleDeleteChat = () => {
     setMenuVisible(false);
-    Alert.alert(
-      'Delete Chat',
-      'Are you sure you want to delete this chat?',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Delete', style: 'destructive',
-          onPress: async () => {
-            try {
-              await axios.delete(`${SERVER_URL}/api/chats/${selectedChat._id}`, {
-                headers: { Authorization: `Bearer ${token}` }
-              });
-              fetchChats();
-            } catch (e) {
-              Alert.alert('Error', 'Could not delete chat');
-            }
+    Alert.alert('Delete Chat', 'Are you sure you want to delete this chat?', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Delete', style: 'destructive',
+        onPress: async () => {
+          try {
+            await axios.delete(`${SERVER_URL}/api/chats/${selectedChat._id}`, {
+              headers: { Authorization: `Bearer ${token}` }
+            });
+            fetchChats();
+          } catch (e) {
+            Alert.alert('Error', 'Could not delete chat');
           }
         }
-      ]
-    );
+      }
+    ]);
   };
 
   if (loading) return (
@@ -124,35 +150,71 @@ export default function ChatsScreen({ navigation }) {
       <FlatList
         data={chats}
         keyExtractor={item => item._id}
-        renderItem={({ item }) => (
-          <TouchableOpacity
-            style={[
-              styles.chatItem,
-              pressedId === item._id && styles.chatItemPressed
-            ]}
-            onPress={() => navigation.navigate('ChatRoom', {
-              chat: item,
-              chatName: getChatName(item)
-            })}
-            onPressIn={() => setPressedId(item._id)}
-            onPressOut={() => setPressedId(null)}
-            onLongPress={() => handleLongPress(item)}
-            delayLongPress={300}>
-            <View style={[
-              styles.avatar,
-              pressedId === item._id && styles.avatarPressed
-            ]}>
-              <Text style={styles.avatarText}>{getChatName(item)[0]?.toUpperCase()}</Text>
-              {isOnline(item) && <View style={styles.onlineDot} />}
-            </View>
-            <View style={styles.chatInfo}>
-              <Text style={styles.chatName}>{getChatName(item)}</Text>
-              <Text style={styles.lastMessage} numberOfLines={1}>
-                {item.lastMessage?.text || 'No messages yet'}
-              </Text>
-            </View>
-          </TouchableOpacity>
-        )}
+        renderItem={({ item }) => {
+          const unread = unreadCounts[item._id] || 0;
+          return (
+            <TouchableOpacity
+              style={[
+                styles.chatItem,
+                pressedId === item._id && styles.chatItemPressed
+              ]}
+              onPress={() => {
+                // Clear unread count when opening chat
+                setUnreadCounts(prev => ({ ...prev, [item._id]: 0 }));
+                navigation.navigate('ChatRoom', {
+                  chat: item,
+                  chatName: getChatName(item)
+                });
+              }}
+              onPressIn={() => setPressedId(item._id)}
+              onPressOut={() => setPressedId(null)}
+              onLongPress={() => handleLongPress(item)}
+              delayLongPress={300}>
+              <View style={[
+                styles.avatar,
+                pressedId === item._id && styles.avatarPressed
+              ]}>
+                <Text style={styles.avatarText}>{getChatName(item)[0]?.toUpperCase()}</Text>
+                {isOnline(item) && <View style={styles.onlineDot} />}
+              </View>
+              <View style={styles.chatInfo}>
+                <View style={styles.chatTopRow}>
+                  <Text style={[
+                    styles.chatName,
+                    unread > 0 && styles.chatNameUnread
+                  ]}>
+                    {getChatName(item)}
+                  </Text>
+                  {item.lastMessage?.createdAt && (
+                    <Text style={[
+                      styles.chatTime,
+                      unread > 0 && styles.chatTimeUnread
+                    ]}>
+                      {new Date(item.lastMessage.createdAt).toLocaleTimeString([], {
+                        hour: '2-digit', minute: '2-digit'
+                      })}
+                    </Text>
+                  )}
+                </View>
+                <View style={styles.chatBottomRow}>
+                  <Text style={[
+                    styles.lastMessage,
+                    unread > 0 && styles.lastMessageUnread
+                  ]} numberOfLines={1}>
+                    {item.lastMessage?.text || 'No messages yet'}
+                  </Text>
+                  {unread > 0 && (
+                    <View style={styles.unreadBadge}>
+                      <Text style={styles.unreadCount}>
+                        {unread > 99 ? '99+' : unread}
+                      </Text>
+                    </View>
+                  )}
+                </View>
+              </View>
+            </TouchableOpacity>
+          );
+        }}
         ListEmptyComponent={
           <View style={styles.emptyContainer}>
             <Text style={styles.emptyEmoji}>💬</Text>
@@ -181,18 +243,13 @@ export default function ChatsScreen({ navigation }) {
             <Text style={styles.menuTitle}>
               {selectedChat ? getChatName(selectedChat) : ''}
             </Text>
-
             <TouchableOpacity style={styles.menuItem} onPress={handleClearChat}>
               <Text style={styles.menuItemText}>🗑️  Clear Chat</Text>
             </TouchableOpacity>
-
             <TouchableOpacity style={styles.menuItem} onPress={handleDeleteChat}>
               <Text style={styles.menuItemDanger}>❌  Delete Chat</Text>
             </TouchableOpacity>
-
-            <TouchableOpacity
-              style={styles.menuCancel}
-              onPress={() => setMenuVisible(false)}>
+            <TouchableOpacity style={styles.menuCancel} onPress={() => setMenuVisible(false)}>
               <Text style={styles.menuCancelText}>Cancel</Text>
             </TouchableOpacity>
           </View>
@@ -215,8 +272,16 @@ const styles = StyleSheet.create({
   avatarText: { color: '#fff', fontSize: 22, fontWeight: 'bold' },
   onlineDot: { position: 'absolute', bottom: 1, right: 1, width: 13, height: 13, borderRadius: 7, backgroundColor: '#4CAF50', borderWidth: 2, borderColor: '#111' },
   chatInfo: { flex: 1 },
+  chatTopRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 },
+  chatBottomRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   chatName: { color: '#fff', fontSize: 16, fontWeight: '600' },
-  lastMessage: { color: '#888', fontSize: 13, marginTop: 3 },
+  chatNameUnread: { fontWeight: '800', color: '#fff' },
+  chatTime: { color: '#888', fontSize: 12 },
+  chatTimeUnread: { color: '#25D366', fontWeight: '600' },
+  lastMessage: { color: '#888', fontSize: 13, flex: 1, marginRight: 8 },
+  lastMessageUnread: { color: '#fff', fontWeight: '600' },
+  unreadBadge: { backgroundColor: '#25D366', borderRadius: 12, minWidth: 22, height: 22, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 6 },
+  unreadCount: { color: '#fff', fontSize: 12, fontWeight: 'bold' },
   emptyContainer: { alignItems: 'center', marginTop: 100 },
   emptyEmoji: { fontSize: 60, marginBottom: 16 },
   emptyTitle: { color: '#fff', fontSize: 20, fontWeight: 'bold', marginBottom: 8 },

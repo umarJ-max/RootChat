@@ -51,7 +51,7 @@ export default function ChatRoomScreen({ route, navigation }) {
 
   const getHeaderSub = () => {
     if (typingUsers.length > 0) {
-      if (chat.isGroup) return `${typingUsers[0]} is typing...`;
+      if (chat.isGroup) return `${typingUsers[0].name} is typing...`;
       return 'typing...';
     }
     if (chat.isGroup) return `${chat.members?.length || 0} members`;
@@ -166,12 +166,14 @@ export default function ChatRoomScreen({ route, navigation }) {
         ));
       });
 
-      socket.on('messagesRead', () => {
-        setMessages(prev => prev.map(m =>
-          m.sender?._id === user._id || m.sender === user._id
-            ? { ...m, status: 'read' }
-            : m
-        ));
+      socket.on('messagesRead', ({ chatId, userId: readerUserId }) => {
+        if (readerUserId !== user._id) {
+          setMessages(prev => prev.map(m =>
+            m.sender?._id === user._id || m.sender === user._id
+              ? { ...m, status: 'read' }
+              : m
+          ));
+        }
       });
 
       socket.on('chatError', () => setUnavailable(true));
@@ -182,14 +184,16 @@ export default function ChatRoomScreen({ route, navigation }) {
 
       socket.on('userTyping', ({ userId: typingUserId, userName }) => {
         if (typingUserId !== user._id) {
-          setTypingUsers(prev =>
-            prev.includes(userName) ? prev : [...prev, userName]
-          );
+          setTypingUsers(prev => {
+            const exists = prev.find(u => u.id === typingUserId);
+            if (exists) return prev;
+            return [...prev, { id: typingUserId, name: userName }];
+          });
         }
       });
 
       socket.on('userStopTyping', ({ userId: typingUserId }) => {
-        setTypingUsers(prev => prev.filter(name => name !== typingUserId));
+        setTypingUsers(prev => prev.filter(u => u.id !== typingUserId));
       });
     }
 
@@ -273,7 +277,6 @@ export default function ChatRoomScreen({ route, navigation }) {
     ]);
   };
 
-  // Get member name by ID from chat members
   const getMemberName = (userId) => {
     const member = chat.members?.find(
       m => (m._id || m)?.toString() === userId?.toString()
@@ -415,7 +418,6 @@ export default function ChatRoomScreen({ route, navigation }) {
           onPress={() => setReceiptVisible(false)}>
           <View style={styles.receiptContainer}>
             <Text style={styles.receiptTitle}>Message Info</Text>
-
             <View style={styles.receiptSection}>
               <View style={styles.receiptSectionHeader}>
                 <Ionicons name="checkmark-done" size={18} color="#53bdeb" />
@@ -441,7 +443,6 @@ export default function ChatRoomScreen({ route, navigation }) {
                 <Text style={styles.receiptEmpty}>No one has read this yet</Text>
               )}
             </View>
-
             <View style={styles.receiptSection}>
               <View style={styles.receiptSectionHeader}>
                 <Ionicons name="checkmark-done" size={18} color="#aaa" />
@@ -467,14 +468,12 @@ export default function ChatRoomScreen({ route, navigation }) {
                 <Text style={styles.receiptEmpty}>Not delivered yet</Text>
               )}
             </View>
-
             <TouchableOpacity style={styles.receiptClose} onPress={() => setReceiptVisible(false)}>
               <Text style={styles.menuCancelText}>Close</Text>
             </TouchableOpacity>
           </View>
         </TouchableOpacity>
       </Modal>
-
     </View>
   );
 }
