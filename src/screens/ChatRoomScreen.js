@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useRef } from 'react';
 import {
   View, Text, FlatList, TextInput, TouchableOpacity,
-  StyleSheet, KeyboardAvoidingView, Platform, Modal,
+  StyleSheet, KeyboardAvoidingView, Modal,
   Clipboard, Alert
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -14,14 +14,57 @@ import { Ionicons } from '@expo/vector-icons';
 export default function ChatRoomScreen({ route, navigation }) {
   const { chat, chatName } = route.params;
   const { user, token } = useAuth();
-  const { socket } = useSocket();
+  const { socket, onlineUsers } = useSocket();
   const [messages, setMessages] = useState([]);
   const [text, setText] = useState('');
   const [unavailable, setUnavailable] = useState(false);
   const [selectedMsg, setSelectedMsg] = useState(null);
   const [menuVisible, setMenuVisible] = useState(false);
+  const [receiptVisible, setReceiptVisible] = useState(false);
+  const [otherUser, setOtherUser] = useState(null);
+  const [typingUsers, setTypingUsers] = useState([]);
   const flatListRef = useRef();
+  const typingTimeoutRef = useRef(null);
   const insets = useSafeAreaInsets();
+
+  const otherMemberId = !chat.isGroup
+    ? chat.members?.find(m => (m._id || m)?.toString() !== user._id)
+    : null;
+
+  const isOnline = otherMemberId &&
+    onlineUsers.includes((otherMemberId._id || otherMemberId)?.toString());
+
+  const formatLastSeen = (date) => {
+    if (!date) return '';
+    const d = new Date(date);
+    const now = new Date();
+    const diff = now - d;
+    const minutes = Math.floor(diff / 60000);
+    const hours = Math.floor(diff / 3600000);
+    const days = Math.floor(diff / 86400000);
+    if (minutes < 1) return 'last seen just now';
+    if (minutes < 60) return `last seen ${minutes}m ago`;
+    if (hours < 24) return `last seen ${hours}h ago`;
+    if (days === 1) return 'last seen yesterday';
+    return `last seen ${d.toLocaleDateString()}`;
+  };
+
+  const getHeaderSub = () => {
+    if (typingUsers.length > 0) {
+      if (chat.isGroup) return `${typingUsers[0]} is typing...`;
+      return 'typing...';
+    }
+    if (chat.isGroup) return `${chat.members?.length || 0} members`;
+    if (isOnline) return 'online';
+    if (otherUser?.lastSeen) return formatLastSeen(otherUser.lastSeen);
+    return 'tap for info';
+  };
+
+  const getHeaderSubStyle = () => {
+    if (typingUsers.length > 0) return [styles.headerSub, styles.headerSubTyping];
+    if (!chat.isGroup && isOnline) return [styles.headerSub, styles.headerSubOnline];
+    return styles.headerSub;
+  };
 
   const isMe = (msg) => {
     if (!msg.sender) return false;
@@ -48,6 +91,28 @@ export default function ChatRoomScreen({ route, navigation }) {
     } catch (e) {}
   };
 
+  const fetchOtherUser = async () => {
+    if (chat.isGroup || !otherMemberId) return;
+    try {
+      const id = (otherMemberId._id || otherMemberId)?.toString();
+      const res = await axios.get(`${SERVER_URL}/api/users/${id}`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      setOtherUser(res.data);
+    } catch (e) {}
+  };
+
+  useEffect(() => {
+    fetchOtherUser();
+  }, []);
+
+  useEffect(() => {
+    if (otherMemberId) {
+      const id = (otherMemberId._id || otherMemberId)?.toString();
+      if (!onlineUsers.includes(id)) fetchOtherUser();
+    }
+  }, [onlineUsers]);
+
   useEffect(() => {
     navigation.setOptions({
       headerTitle: () => (
@@ -59,20 +124,26 @@ export default function ChatRoomScreen({ route, navigation }) {
           </View>
           <View>
             <Text style={styles.headerName}>{chatName}</Text>
-            <Text style={styles.headerSub}>{chat.isGroup ? 'Group' : 'tap for info'}</Text>
+            <Text style={getHeaderSubStyle()}>{getHeaderSub()}</Text>
           </View>
         </TouchableOpacity>
       ),
       headerStyle: { backgroundColor: '#1f2c34' },
       headerTintColor: '#fff',
     });
+  }, [isOnline, otherUser, chat.members, typingUsers]);
 
+  useEffect(() => {
     fetchMessages();
 
-    const focusUnsubscribe = navigation.addListener('focus', fetchMessages);
+    const focusUnsubscribe = navigation.addListener('focus', () => {
+      fetchMessages();
+      if (socket) socket.emit('markRead', { chatId: chat._id, userId: user._id });
+    });
 
     if (socket) {
       socket.emit('joinChat', chat._id);
+      socket.emit('markRead', { chatId: chat._id, userId: user._id });
 
       socket.on('newMessage', (msg) => {
         setMessages(prev => {
@@ -80,10 +151,19 @@ export default function ChatRoomScreen({ route, navigation }) {
           return [...filtered, msg];
         });
         setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
+        socket.emit('markRead', { chatId: chat._id, userId: user._id });
       });
 
       socket.on('messageStatus', ({ messageId, status }) => {
-        setMessages(prev => prev.map(m => m._id === messageId ? { ...m, status } : m));
+        setMessages(prev => prev.map(m =>
+          m._id === messageId ? { ...m, status } : m
+        ));
+      });
+
+      socket.on('messageStatusUpdate', ({ messageId, status, readBy, deliveredTo }) => {
+        setMessages(prev => prev.map(m =>
+          m._id === messageId ? { ...m, status, readBy, deliveredTo } : m
+        ));
       });
 
       socket.on('messagesRead', () => {
@@ -94,15 +174,23 @@ export default function ChatRoomScreen({ route, navigation }) {
         ));
       });
 
-      socket.on('chatError', () => {
-        setUnavailable(true);
-      });
+      socket.on('chatError', () => setUnavailable(true));
 
       socket.on('messageDeleted', (messageId) => {
         setMessages(prev => prev.filter(m => m._id !== messageId));
       });
 
-      socket.emit('markRead', { chatId: chat._id, userId: user._id });
+      socket.on('userTyping', ({ userId: typingUserId, userName }) => {
+        if (typingUserId !== user._id) {
+          setTypingUsers(prev =>
+            prev.includes(userName) ? prev : [...prev, userName]
+          );
+        }
+      });
+
+      socket.on('userStopTyping', ({ userId: typingUserId }) => {
+        setTypingUsers(prev => prev.filter(name => name !== typingUserId));
+      });
     }
 
     return () => {
@@ -110,15 +198,30 @@ export default function ChatRoomScreen({ route, navigation }) {
       if (socket) {
         socket.off('newMessage');
         socket.off('messageStatus');
+        socket.off('messageStatusUpdate');
         socket.off('messagesRead');
         socket.off('chatError');
         socket.off('messageDeleted');
+        socket.off('userTyping');
+        socket.off('userStopTyping');
       }
     };
   }, [socket]);
 
+  const handleTextChange = (value) => {
+    setText(value);
+    if (!socket) return;
+    socket.emit('typing', { chatId: chat._id, userId: user._id, userName: user.name });
+    if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+    typingTimeoutRef.current = setTimeout(() => {
+      socket.emit('stopTyping', { chatId: chat._id, userId: user._id });
+    }, 2000);
+  };
+
   const sendMessage = () => {
     if (!text.trim() || !socket || unavailable) return;
+    if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+    socket.emit('stopTyping', { chatId: chat._id, userId: user._id });
 
     const tempMsg = {
       _id: Date.now().toString(),
@@ -130,12 +233,7 @@ export default function ChatRoomScreen({ route, navigation }) {
     };
     setMessages(prev => [...prev, tempMsg]);
     setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 50);
-
-    socket.emit('sendMessage', {
-      chatId: chat._id,
-      senderId: user._id,
-      text: text.trim()
-    });
+    socket.emit('sendMessage', { chatId: chat._id, senderId: user._id, text: text.trim() });
     setText('');
   };
 
@@ -150,28 +248,37 @@ export default function ChatRoomScreen({ route, navigation }) {
     setMenuVisible(false);
   };
 
+  const handleShowReceipts = () => {
+    setMenuVisible(false);
+    setReceiptVisible(true);
+  };
+
   const handleDelete = () => {
     setMenuVisible(false);
-    Alert.alert(
-      'Delete Message',
-      'Delete this message for you?',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Delete', style: 'destructive',
-          onPress: async () => {
-            try {
-              await axios.delete(`${SERVER_URL}/api/chats/message/${selectedMsg._id}`, {
-                headers: { Authorization: `Bearer ${token}` }
-              });
-              setMessages(prev => prev.filter(m => m._id !== selectedMsg._id));
-            } catch (e) {
-              Alert.alert('Error', 'Could not delete message');
-            }
+    Alert.alert('Delete Message', 'Delete this message for you?', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Delete', style: 'destructive',
+        onPress: async () => {
+          try {
+            await axios.delete(`${SERVER_URL}/api/chats/message/${selectedMsg._id}`, {
+              headers: { Authorization: `Bearer ${token}` }
+            });
+            setMessages(prev => prev.filter(m => m._id !== selectedMsg._id));
+          } catch (e) {
+            Alert.alert('Error', 'Could not delete message');
           }
         }
-      ]
+      }
+    ]);
+  };
+
+  // Get member name by ID from chat members
+  const getMemberName = (userId) => {
+    const member = chat.members?.find(
+      m => (m._id || m)?.toString() === userId?.toString()
     );
+    return member?.name || 'Unknown';
   };
 
   return (
@@ -233,9 +340,7 @@ export default function ChatRoomScreen({ route, navigation }) {
 
         {unavailable && (
           <View style={styles.unavailableBanner}>
-            <Text style={styles.unavailableText}>
-              This person is no longer on the app
-            </Text>
+            <Text style={styles.unavailableText}>This person is no longer on the app</Text>
           </View>
         )}
 
@@ -245,7 +350,7 @@ export default function ChatRoomScreen({ route, navigation }) {
             placeholder={unavailable ? 'Chat unavailable' : 'Message'}
             placeholderTextColor="#666"
             value={text}
-            onChangeText={setText}
+            onChangeText={handleTextChange}
             multiline
             editable={!unavailable}
           />
@@ -259,6 +364,7 @@ export default function ChatRoomScreen({ route, navigation }) {
 
       </KeyboardAvoidingView>
 
+      {/* Message Options Menu */}
       <Modal
         visible={menuVisible}
         transparent
@@ -274,25 +380,101 @@ export default function ChatRoomScreen({ route, navigation }) {
                 {selectedMsg.text}
               </Text>
             )}
-
             <TouchableOpacity style={styles.menuItem} onPress={handleCopy}>
               <Ionicons name="copy-outline" size={20} color="#fff" style={styles.menuIcon} />
               <Text style={styles.menuItemText}>Copy</Text>
             </TouchableOpacity>
-
+            {selectedMsg && isMe(selectedMsg) && chat.isGroup && (
+              <TouchableOpacity style={styles.menuItem} onPress={handleShowReceipts}>
+                <Ionicons name="checkmark-done-outline" size={20} color="#53bdeb" style={styles.menuIcon} />
+                <Text style={styles.menuItemText}>Message Info</Text>
+              </TouchableOpacity>
+            )}
             {selectedMsg && isMe(selectedMsg) && (
               <TouchableOpacity style={styles.menuItem} onPress={handleDelete}>
                 <Ionicons name="trash-outline" size={20} color="#ff4444" style={styles.menuIcon} />
                 <Text style={styles.menuItemDanger}>Delete</Text>
               </TouchableOpacity>
             )}
-
             <TouchableOpacity style={styles.menuCancel} onPress={() => setMenuVisible(false)}>
               <Text style={styles.menuCancelText}>Cancel</Text>
             </TouchableOpacity>
           </View>
         </TouchableOpacity>
       </Modal>
+
+      {/* Read Receipts Modal */}
+      <Modal
+        visible={receiptVisible}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setReceiptVisible(false)}>
+        <TouchableOpacity
+          style={styles.modalOverlay}
+          activeOpacity={1}
+          onPress={() => setReceiptVisible(false)}>
+          <View style={styles.receiptContainer}>
+            <Text style={styles.receiptTitle}>Message Info</Text>
+
+            <View style={styles.receiptSection}>
+              <View style={styles.receiptSectionHeader}>
+                <Ionicons name="checkmark-done" size={18} color="#53bdeb" />
+                <Text style={styles.receiptSectionTitle}>Read by</Text>
+              </View>
+              {selectedMsg?.readBy?.length > 0 ? (
+                selectedMsg.readBy.map((r, i) => (
+                  <View key={i} style={styles.receiptItem}>
+                    <View style={styles.receiptAvatar}>
+                      <Text style={styles.receiptAvatarText}>
+                        {getMemberName(r.user)?.[0]?.toUpperCase()}
+                      </Text>
+                    </View>
+                    <View>
+                      <Text style={styles.receiptName}>{getMemberName(r.user)}</Text>
+                      <Text style={styles.receiptTime}>
+                        {new Date(r.readAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      </Text>
+                    </View>
+                  </View>
+                ))
+              ) : (
+                <Text style={styles.receiptEmpty}>No one has read this yet</Text>
+              )}
+            </View>
+
+            <View style={styles.receiptSection}>
+              <View style={styles.receiptSectionHeader}>
+                <Ionicons name="checkmark-done" size={18} color="#aaa" />
+                <Text style={styles.receiptSectionTitle}>Delivered to</Text>
+              </View>
+              {selectedMsg?.deliveredTo?.length > 0 ? (
+                selectedMsg.deliveredTo.map((d, i) => (
+                  <View key={i} style={styles.receiptItem}>
+                    <View style={styles.receiptAvatar}>
+                      <Text style={styles.receiptAvatarText}>
+                        {getMemberName(d.user)?.[0]?.toUpperCase()}
+                      </Text>
+                    </View>
+                    <View>
+                      <Text style={styles.receiptName}>{getMemberName(d.user)}</Text>
+                      <Text style={styles.receiptTime}>
+                        {new Date(d.deliveredAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      </Text>
+                    </View>
+                  </View>
+                ))
+              ) : (
+                <Text style={styles.receiptEmpty}>Not delivered yet</Text>
+              )}
+            </View>
+
+            <TouchableOpacity style={styles.receiptClose} onPress={() => setReceiptVisible(false)}>
+              <Text style={styles.menuCancelText}>Close</Text>
+            </TouchableOpacity>
+          </View>
+        </TouchableOpacity>
+      </Modal>
+
     </View>
   );
 }
@@ -304,6 +486,8 @@ const styles = StyleSheet.create({
   headerAvatarText: { color: '#fff', fontSize: 16, fontWeight: 'bold' },
   headerName: { color: '#fff', fontSize: 16, fontWeight: '600' },
   headerSub: { color: '#aaa', fontSize: 12 },
+  headerSubOnline: { color: '#25D366' },
+  headerSubTyping: { color: '#25D366', fontStyle: 'italic' },
   messagesList: { padding: 10, paddingBottom: 6 },
   bubbleWrapper: { marginVertical: 2, maxWidth: '78%' },
   myWrapper: { alignSelf: 'flex-end' },
@@ -336,4 +520,16 @@ const styles = StyleSheet.create({
   menuItemDanger: { color: '#ff4444', fontSize: 16 },
   menuCancel: { padding: 18, alignItems: 'center' },
   menuCancelText: { color: '#8696a0', fontSize: 16 },
+  receiptContainer: { backgroundColor: '#1e2b33', borderRadius: 16, width: '85%', maxHeight: '70%', overflow: 'hidden' },
+  receiptTitle: { color: '#fff', fontSize: 17, fontWeight: '700', padding: 18, borderBottomWidth: 1, borderBottomColor: '#2a3942' },
+  receiptSection: { padding: 14, borderBottomWidth: 1, borderBottomColor: '#2a3942' },
+  receiptSectionHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 10 },
+  receiptSectionTitle: { color: '#aaa', fontSize: 13, fontWeight: '600', textTransform: 'uppercase' },
+  receiptItem: { flexDirection: 'row', alignItems: 'center', paddingVertical: 8, gap: 12 },
+  receiptAvatar: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#128C7E', justifyContent: 'center', alignItems: 'center' },
+  receiptAvatarText: { color: '#fff', fontSize: 14, fontWeight: 'bold' },
+  receiptName: { color: '#fff', fontSize: 14 },
+  receiptTime: { color: '#8696a0', fontSize: 12, marginTop: 2 },
+  receiptEmpty: { color: '#8696a0', fontSize: 13, fontStyle: 'italic', paddingVertical: 4 },
+  receiptClose: { padding: 18, alignItems: 'center' },
 });

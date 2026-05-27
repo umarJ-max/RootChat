@@ -21,6 +21,7 @@
         "backgroundColor": "#0b1a0b"
       },
       "package": "com.umarj.rootchat",
+      "googleServicesFile": "./google-services.json",
       "permissions": [
         "RECEIVE_BOOT_COMPLETED",
         "VIBRATE",

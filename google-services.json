@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "777213595395",
+    "project_id": "rootchat-3d45e",
+    "storage_bucket": "rootchat-3d45e.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:777213595395:android:d084e3057d30bfa358a336",
+        "android_client_info": {
+          "package_name": "com.umarj.rootchat"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBNFhRVY_E7HSB-kYU5HXBEOg2kLnNE-YI"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

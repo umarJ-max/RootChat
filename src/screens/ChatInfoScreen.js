@@ -29,14 +29,9 @@ export default function ChatInfoScreen({ route, navigation }) {
       const res = await axios.get(`${SERVER_URL}/api/chats`, {
         headers: { Authorization: `Bearer ${token}` }
       });
-      console.log('All chats:', JSON.stringify(res.data, null, 2));
       const found = res.data.find(c => c._id.toString() === initialChat._id.toString());
-      console.log('Found chat:', JSON.stringify(found, null, 2));
       if (found) {
         setChat(found);
-        console.log('Admin field:', JSON.stringify(found.admin));
-        console.log('User ID:', user._id);
-        console.log('Admin ID check:', found.admin?._id, found.admin);
         setNewGroupName(found.name || '');
         setNewDescription(found.description || '');
       }
@@ -46,9 +41,12 @@ export default function ChatInfoScreen({ route, navigation }) {
     setFetching(false);
   };
 
-  const adminId = chat.admin?._id || chat.admin;
-  const isAdmin = chat.isGroup && adminId &&
-    adminId.toString() === user._id.toString();
+  const ownerId = (chat.admin?._id || chat.admin)?.toString();
+  const isOwner = chat.isGroup && ownerId === user._id.toString();
+  const isAdmin = chat.isGroup && (
+    isOwner ||
+    chat.admins?.some(a => (a._id || a)?.toString() === user._id.toString())
+  );
 
   const otherMember = chat.isGroup
     ? null
@@ -94,7 +92,7 @@ export default function ChatInfoScreen({ route, navigation }) {
   };
 
   const handleMakeAdmin = (memberId, memberName) => {
-    Alert.alert('Make Admin', `Make ${memberName} the group admin?`, [
+    Alert.alert('Make Admin', `Make ${memberName} a group admin?`, [
       { text: 'Cancel', style: 'cancel' },
       {
         text: 'Confirm',
@@ -105,9 +103,30 @@ export default function ChatInfoScreen({ route, navigation }) {
               { headers: { Authorization: `Bearer ${token}` } }
             );
             await fetchChatDetails();
-            Alert.alert('Done', `${memberName} is now admin`);
+            Alert.alert('Done', `${memberName} is now an admin`);
           } catch (e) {
             Alert.alert('Error', e.response?.data?.message || 'Could not make admin');
+          }
+        }
+      }
+    ]);
+  };
+
+  const handleRemoveAdmin = (memberId, memberName) => {
+    Alert.alert('Remove Admin', `Remove ${memberName} as admin?`, [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Confirm', style: 'destructive',
+        onPress: async () => {
+          try {
+            await axios.put(`${SERVER_URL}/api/chats/${chat._id}/remove-admin`,
+              { memberId },
+              { headers: { Authorization: `Bearer ${token}` } }
+            );
+            await fetchChatDetails();
+            Alert.alert('Done', `${memberName} is no longer admin`);
+          } catch (e) {
+            Alert.alert('Error', e.response?.data?.message || 'Could not remove admin');
           }
         }
       }
@@ -271,7 +290,7 @@ export default function ChatInfoScreen({ route, navigation }) {
             {isAdmin && (
               <View style={styles.adminBadge}>
                 <Ionicons name="shield-checkmark" size={12} color="#fff" />
-                <Text style={styles.adminBadgeText}>Admin</Text>
+                <Text style={styles.adminBadgeText}>{isOwner ? 'Owner' : 'Admin'}</Text>
               </View>
             )}
           </View>
@@ -283,9 +302,11 @@ export default function ChatInfoScreen({ route, navigation }) {
           <Text style={styles.sectionTitle}>MEMBERS</Text>
           {chat.members.map(member => {
             if (!member || !member._id) return null;
-            const memberAdminId = chat.admin?._id || chat.admin;
-            const memberIsAdmin = memberAdminId &&
-              memberAdminId.toString() === member._id.toString();
+            const memberIsAdmin = chat.admins?.some(
+              a => (a._id || a)?.toString() === member._id.toString()
+            ) || (chat.admin?._id || chat.admin)?.toString() === member._id.toString();
+            const memberIsOwner = (chat.admin?._id || chat.admin)?.toString() === member._id.toString();
+
             return (
               <View key={member._id} style={styles.memberItem}>
                 <View style={styles.memberAvatar}>
@@ -297,17 +318,29 @@ export default function ChatInfoScreen({ route, navigation }) {
                   <Text style={styles.memberName}>
                     {member._id === user._id ? `${member.name} (You)` : member.name}
                   </Text>
-                  {memberIsAdmin && (
+                  {memberIsOwner ? (
+                    <Text style={styles.memberOwnerTag}>Owner</Text>
+                  ) : memberIsAdmin ? (
                     <Text style={styles.memberAdminTag}>Admin</Text>
-                  )}
+                  ) : null}
                 </View>
                 {isAdmin && member._id !== user._id && (
                   <View style={styles.memberActions}>
-                    <TouchableOpacity
-                      style={styles.memberActionBtn}
-                      onPress={() => handleMakeAdmin(member._id, member.name)}>
-                      <Ionicons name="shield-checkmark-outline" size={18} color="#25D366" />
-                    </TouchableOpacity>
+                    {isOwner && !memberIsOwner && (
+                      memberIsAdmin ? (
+                        <TouchableOpacity
+                          style={styles.memberActionBtn}
+                          onPress={() => handleRemoveAdmin(member._id, member.name)}>
+                          <Ionicons name="shield-outline" size={18} color="#ff4444" />
+                        </TouchableOpacity>
+                      ) : (
+                        <TouchableOpacity
+                          style={styles.memberActionBtn}
+                          onPress={() => handleMakeAdmin(member._id, member.name)}>
+                          <Ionicons name="shield-checkmark-outline" size={18} color="#25D366" />
+                        </TouchableOpacity>
+                      )
+                    )}
                     <TouchableOpacity
                       style={styles.memberActionBtn}
                       onPress={() => handleRemoveMember(member._id, member.name)}>
@@ -333,7 +366,7 @@ export default function ChatInfoScreen({ route, navigation }) {
               <Ionicons name="exit-outline" size={20} color="#ff4444" style={styles.actionIcon} />
               <Text style={styles.actionDanger}>Leave Group</Text>
             </TouchableOpacity>
-            {isAdmin && (
+            {isOwner && (
               <TouchableOpacity style={styles.actionItem} onPress={handleDeleteGroup}>
                 <Ionicons name="close-circle-outline" size={20} color="#ff4444" style={styles.actionIcon} />
                 <Text style={styles.actionDanger}>Delete Group</Text>
@@ -382,6 +415,7 @@ const styles = StyleSheet.create({
   memberInfo: { flex: 1 },
   memberName: { color: '#fff', fontSize: 15 },
   memberAdminTag: { color: '#25D366', fontSize: 12, marginTop: 2 },
+  memberOwnerTag: { color: '#FFD700', fontSize: 12, marginTop: 2 },
   memberActions: { flexDirection: 'row', gap: 8 },
   memberActionBtn: { padding: 6 },
   actionItem: { flexDirection: 'row', alignItems: 'center', padding: 16, borderBottomWidth: 1, borderBottomColor: '#2a2a2a' },
